@@ -2,6 +2,10 @@
 
 `pros_car` is the robot-side control module for PROS. It contains vehicle control, arm control, Nav2 processing, frontier exploration, custom A* planning, and the high-level task state machine.
 
+## 路徑說明
+
+本 README 中的檔案路徑都相對於 `pros_car` repository 根目錄，例如 `src/pros_car_py/pros_car_py/task_controller.py` 表示此 repo 內的 `src/pros_car_py/pros_car_py/task_controller.py`。
+
 ## Portfolio Focus
 
 | What to review | File |
@@ -17,8 +21,8 @@
 
 ## Key Ideas
 
-- `main2.py` assembles the ROS communicator, data processor, Nav2 processing, car controller, arm controller, frontier explorer, and task controller.
-- `TaskController` runs the autonomous demo as a non-blocking state machine, so perception, localization, map updates, timeouts, and safety checks remain active during execution.
+- [`src/pros_car_py/pros_car_py/main2.py`](./src/pros_car_py/pros_car_py/main2.py) assembles the ROS communicator, data processor, Nav2 processing, car controller, arm controller, frontier explorer, and task controller.
+- [`src/pros_car_py/pros_car_py/task_controller.py`](./src/pros_car_py/pros_car_py/task_controller.py) runs the autonomous demo as a non-blocking state machine, so perception, localization, map updates, timeouts, and safety checks remain active during execution.
 - The planner first attempts Hybrid A* with robot-footprint collision checking, then falls back to Grid A* when needed.
 - Long-distance movement uses map planning; short-distance final approach uses YOLO offset and depth feedback.
 
@@ -39,7 +43,7 @@
 
 ## 使用說明
 ## 🚀 環境初始化
-1. 執行以下指令進入環境：
+1. 執行 [`car_control.sh`](./car_control.sh) 進入環境：
    ```bash
    ./car_control.sh
    ```
@@ -92,7 +96,7 @@ ros2 run pros_car_py robot_control
 # pros_car Usage Guide
 
 ## 🚀 Environment Setup
-1. Enter the environment by running:
+1. Enter the environment by running [`car_control.sh`](./car_control.sh):
    ```bash
    ./car_control.sh
    ```
@@ -136,6 +140,6 @@ There are **two autonomous navigation modes**:
 - **Function**: Receives `/goal_pose` coordinates from **Foxglove** and navigates accordingly.
 
 ### 2️⃣ Target Auto Navigation (`target_auto_nav`)
-- **Function**: `car_controller.py` internally **publishes** `/goal_pose` coordinates for automatic navigation.
+- **Function**: [`src/pros_car_py/pros_car_py/car_controller.py`](./src/pros_car_py/pros_car_py/car_controller.py) internally **publishes** `/goal_pose` coordinates for automatic navigation.
 
 📢 **Note**: Press `q` at any time to **stop the vehicle immediately** and exit navigation mode.
