@@ -1,3 +1,9 @@
+"""Entry point for the full autonomous task flow.
+
+This version wires the complete TaskController, including Task 1, Task 2 with
+bridge bear recovery, and Task 3 door operation.
+"""
+
 import urwid
 import os
 import threading
@@ -20,6 +26,7 @@ from pros_car_py.frontier_explorer import FrontierExplorer
 
 
 def init_ros_node():
+    """Start the shared ROS communicator in a background spin thread."""
     rclpy.init()
     node = RosCommunicator()
     thread = threading.Thread(target=rclpy.spin, args=(node,))
@@ -29,8 +36,14 @@ def init_ros_node():
 
 def main():
     ros_communicator, ros_thread = init_ros_node()
+
+    # DataProcessor keeps the latest sensor/perception state; Nav2Processing
+    # turns pose, map, and target information into navigation decisions.
     data_processor = DataProcessor(ros_communicator)
     nav2_processing = Nav2Processing(ros_communicator, data_processor)
+
+    # Controllers are intentionally created once and shared by the mode UI and
+    # TaskController so manual control and autonomous tasks use the same outputs.
     ik_solver = PybulletRobotController(end_eff_index=5)
     car_controller = CarController(ros_communicator, nav2_processing)
     arm_controller = ArmController(ros_communicator, data_processor)
@@ -41,6 +54,9 @@ def main():
     frontier_explorer = FrontierExplorer(
         ros_communicator, data_processor, nav2_processing
     )
+
+    # Full TaskController: includes bridge ascent, bridge bear search/grab,
+    # descent, return home, and door operation states.
     task_controller = TaskController(
         car_controller,
         arm_controller,
@@ -57,8 +73,10 @@ def main():
     )
 
     try:
+        # ModeApp owns the terminal menu and repeatedly calls controller logic.
         app.main()
     finally:
+        # Always stop ROS cleanly so serial devices and ROS resources are freed.
         rclpy.shutdown()
         ros_thread.join()
 
