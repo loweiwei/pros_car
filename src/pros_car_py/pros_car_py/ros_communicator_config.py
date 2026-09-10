@@ -9,15 +9,22 @@ vel, rotate_vel為自走車PID數值, 可於arduino程式碼查看
 
 前左、前右、後左、後右
 """
-speed_ratio = 50
+speed_ratio = 70
 vel = 6.0*speed_ratio
-vel_slow = 3.0*speed_ratio
-rotate_vel = 6.0*speed_ratio
-rotate_vel_slow = 5.0*speed_ratio
+vel_slow = 5.0*speed_ratio
+vel_bridge = 12.5 * speed_ratio
+vel_very_slow = 2.0*speed_ratio
+rotate_vel = 5.6*speed_ratio
+rotate_vel_slow = 4.9*speed_ratio
 rotate_vel_median = 5.5*speed_ratio
+rotate_vel_fine = 6.0*speed_ratio
 ACTION_MAPPINGS = {
     "FORWARD": [vel, vel, vel, vel],  # 前進
     "FORWARD_SLOW": [vel_slow, vel_slow, vel_slow, vel_slow],  # 前進
+    "FORWARD_BRIDGE": [vel_bridge, vel_bridge, vel_bridge, vel_bridge],  # 上橋/橋上前進
+    "FORWARD_BRIDGE_LEFT": [vel_bridge * 0.85, vel_bridge, vel_bridge * 0.85, vel_bridge],  # 上橋左修正，保持前進推力
+    "FORWARD_BRIDGE_RIGHT": [vel_bridge, vel_bridge * 0.85, vel_bridge, vel_bridge * 0.85],  # 上橋右修正，保持前進推力
+    "FORWARD_VERY_SLOW": [vel_very_slow, vel_very_slow, vel_very_slow, vel_very_slow],  # 接近目標用慢速前進
     "LEFT_FRONT": [rotate_vel, rotate_vel * 1.2, rotate_vel, rotate_vel * 1.2],  # 左前
     "COUNTERCLOCKWISE_ROTATION": [
         -rotate_vel,
@@ -31,6 +38,12 @@ ACTION_MAPPINGS = {
         -rotate_vel_slow,
         rotate_vel_slow,
     ],  # 慢左自轉
+    "COUNTERCLOCKWISE_ROTATION_FINE": [
+        -rotate_vel_fine,
+        rotate_vel_fine,
+        -rotate_vel_fine,
+        rotate_vel_fine,
+    ],  # 微調左自轉
     "COUNTERCLOCKWISE_ROTATION_MEDIAN": [
         -rotate_vel_median,
         rotate_vel_median,
@@ -46,6 +59,12 @@ ACTION_MAPPINGS = {
         rotate_vel_slow,
         -rotate_vel_slow,
     ],  # 右慢自轉
+    "CLOCKWISE_ROTATION_FINE": [
+        rotate_vel_fine,
+        -rotate_vel_fine,
+        rotate_vel_fine,
+        -rotate_vel_fine,
+    ],  # 微調右自轉
     "CLOCKWISE_ROTATION_MEDIAN": [
         rotate_vel_median,
         -rotate_vel_median,
@@ -53,6 +72,7 @@ ACTION_MAPPINGS = {
         -rotate_vel_median,
     ],  # 中右自轉
     "RIGHT_FRONT": [rotate_vel * 1.2, rotate_vel, rotate_vel * 1.2, rotate_vel],  # 右前
+    "RIGHT_FRONT_STRONG": [rotate_vel * 2.25, rotate_vel * 1.875, rotate_vel * 2.25, rotate_vel * 1.875],  # Task3 強推門右前
     "RIGHT_SHIFT": [rotate_vel, -rotate_vel, -rotate_vel, rotate_vel],
     "LEFT_SHIFT": [-rotate_vel, rotate_vel, rotate_vel, -rotate_vel],
     "STOP": [0.0, 0.0, 0.0, 0.0],

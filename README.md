@@ -1,6 +1,43 @@
-# pros_car 使用說明
-## class diagram
+# pros_car: Robot Control and Task Decision Layer
+
+`pros_car` is the robot-side control module for PROS. It contains vehicle control, arm control, Nav2 processing, frontier exploration, custom A* planning, and the high-level task state machine.
+
+## Portfolio Focus
+
+| What to review | File |
+| --- | --- |
+| Main entry point | [`src/pros_car_py/pros_car_py/main2.py`](./src/pros_car_py/pros_car_py/main2.py) |
+| Task state machine | [`src/pros_car_py/pros_car_py/task_controller.py`](./src/pros_car_py/pros_car_py/task_controller.py) |
+| Hybrid A* planner | [`src/pros_car_py/pros_car_py/hybrid_astar_planner.py`](./src/pros_car_py/pros_car_py/hybrid_astar_planner.py) |
+| Grid A* fallback planner | [`src/pros_car_py/pros_car_py/grid_astar_planner.py`](./src/pros_car_py/pros_car_py/grid_astar_planner.py) |
+| Navigation processing | [`src/pros_car_py/pros_car_py/nav_processing.py`](./src/pros_car_py/pros_car_py/nav_processing.py) |
+| ROS topic interface | [`src/pros_car_py/pros_car_py/ros_communicator.py`](./src/pros_car_py/pros_car_py/ros_communicator.py) |
+| Frontier exploration | [`src/pros_car_py/pros_car_py/frontier_explorer.py`](./src/pros_car_py/pros_car_py/frontier_explorer.py) |
+| Arm and IK logic | [`src/pros_car_py/pros_car_py/arm_controller_2D.py`](./src/pros_car_py/pros_car_py/arm_controller_2D.py), [`src/pros_car_py/pros_car_py/ik_solver.py`](./src/pros_car_py/pros_car_py/ik_solver.py) |
+
+## Key Ideas
+
+- `main2.py` assembles the ROS communicator, data processor, Nav2 processing, car controller, arm controller, frontier explorer, and task controller.
+- `TaskController` runs the autonomous demo as a non-blocking state machine, so perception, localization, map updates, timeouts, and safety checks remain active during execution.
+- The planner first attempts Hybrid A* with robot-footprint collision checking, then falls back to Grid A* when needed.
+- Long-distance movement uses map planning; short-distance final approach uses YOLO offset and depth feedback.
+
+## 整體任務流程的兩個版本
+
+以下兩個指令都是啟動整個任務控制系統，不是只執行 Task 2。差別在於 Task 2 的橋上熊回收流程是否啟用。
+
+| 版本 | 執行指令 | 說明 |
+| --- | --- | --- |
+| 完整流程版 | `ros2 run pros_car_py robot_control` | 啟動完整任務系統；Task 2 設計包含上橋、橋上搜尋熊、抓取、下橋與返回起點。 |
+| Demo 當天版本 | `ros2 run pros_car_py robot_control_skip_task2_bear` | 啟動 demo 當天使用的任務系統；Task 2 主要展示上橋與下橋，未完成橋上抓熊回收。 |
+
+這兩個入口定義在 [`src/pros_car_py/setup.py`](./src/pros_car_py/setup.py)。Demo 當天若要重現展示流程，使用 `robot_control_skip_task2_bear`；若要看完整設計流程，使用 `robot_control`。
+
+## Class Diagram
+
 ![pros_car](https://github.com/alianlbj23/pros_car/blob/main/img/pros_car.drawio.png?raw=true)
+
+## 使用說明
 ## 🚀 環境初始化
 1. 執行以下指令進入環境：
    ```bash
@@ -102,4 +139,3 @@ There are **two autonomous navigation modes**:
 - **Function**: `car_controller.py` internally **publishes** `/goal_pose` coordinates for automatic navigation.
 
 📢 **Note**: Press `q` at any time to **stop the vehicle immediately** and exit navigation mode.
-

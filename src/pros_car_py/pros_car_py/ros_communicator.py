@@ -2,7 +2,7 @@ from rclpy.node import Node
 from pros_car_py.car_models import DeviceDataTypeEnum, CarCControl
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, Point
 from std_msgs.msg import String, Header
-from nav_msgs.msg import Path
+from nav_msgs.msg import Path, OccupancyGrid, Odometry
 from sensor_msgs.msg import LaserScan, Imu, CompressedImage
 from trajectory_msgs.msg import JointTrajectoryPoint
 import orjson
@@ -14,19 +14,34 @@ from visualization_msgs.msg import Marker
 from nav2_msgs.srv import ClearEntireCostmap
 from rclpy.action import ActionClient
 from nav2_msgs.action import NavigateToPose
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import rclpy
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge
+import time
+import math
 
 
 class RosCommunicator(Node):
     def __init__(self):
         super().__init__("RosCommunicator")
+        self._last_debug_log = {}
+        self.latest_data = {}
 
         # subscribeamcl_pose
         self.latest_amcl_pose = None
         self.subscriber_amcl = self.create_subscription(
             PoseWithCovarianceStamped, "/amcl_pose", self.subscriber_amcl_callback, 1
+        )
+
+        self.latest_slam_pose = None
+        self.subscriber_slam_pose = self.create_subscription(
+            PoseWithCovarianceStamped, "/pose", self.subscriber_slam_pose_callback, 1
+        )
+
+        self.latest_odom = None
+        self.subscriber_odom = self.create_subscription(
+            Odometry, "/odom", self.subscriber_odom_callback, 1
         )
 
         # subscribe goal_pose
@@ -48,6 +63,17 @@ class RosCommunicator(Node):
             Path, "/received_global_plan", self.received_global_plan_callback, 1
         )
 
+        self.latest_map = None
+        map_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.subscriber_map = self.create_subscription(
+            OccupancyGrid, "/map", self.map_callback, map_qos
+        )
+
         # Subscribe to YOLO detected object coordinates
         self.latest_yolo_coordinates = None
         self.subscriber_yolo_detection_position = self.create_subscription(
@@ -60,8 +86,8 @@ class RosCommunicator(Node):
         # Subscribe to YOLO detected object coordinates
         self.latest_yolo_offset = None
         self.subscriber_yolo_offset = self.create_subscription(
-            PointStamped,
-            "/yolo/detection/offset",
+            String,
+            "/yolo/object/offset",
             self.yolo_detection_offset_callback,
             10,
         )
@@ -69,6 +95,14 @@ class RosCommunicator(Node):
         self.latest_yolo_detection_status = None
         self.subscriber_yolo_detection_status = self.create_subscription(
             Bool, "/yolo/detection/status", self.yolo_detection_status_callback, 10
+        )
+
+        self.latest_yolo_target_map_position = None
+        self.subscriber_yolo_target_map_position = self.create_subscription(
+            PointStamped,
+            "/yolo/target_map_position",
+            self.yolo_target_map_position_callback,
+            10,
         )
 
         self.latest_imu_data = None
@@ -84,6 +118,32 @@ class RosCommunicator(Node):
         self.latest_yolo_target_info = None
         self.yolo_target_info_sub = self.create_subscription(
             Float32MultiArray, "/yolo/target_info", self.yolo_target_info_callback, 1
+        )
+
+        self.latest_yolo_bridge_info = None
+        self.yolo_bridge_info_sub = self.create_subscription(
+            Float32MultiArray, "/yolo/bridge_info", self.yolo_bridge_info_callback, 1
+        )
+
+        self.latest_yolo_path_info = None
+        self.yolo_path_info_sub = self.create_subscription(
+            Float32MultiArray, "/yolo/path_info", self.yolo_path_info_callback, 1
+        )
+
+        self.latest_yolo_bridge_entry_info = None
+        self.yolo_bridge_entry_info_sub = self.create_subscription(
+            Float32MultiArray,
+            "/yolo/bridge_entry_info",
+            self.yolo_bridge_entry_info_callback,
+            1,
+        )
+
+        self.latest_yolo_pre_bridge_goal = None
+        self.yolo_pre_bridge_goal_sub = self.create_subscription(
+            PoseStamped,
+            "/yolo/pre_bridge_goal",
+            self.yolo_pre_bridge_goal_callback,
+            1,
         )
 
         self.latest_camera_x_multi_depth = None
@@ -106,9 +166,13 @@ class RosCommunicator(Node):
         self.publisher_forward = self.create_publisher(
             Float32MultiArray, DeviceDataTypeEnum.car_C_front_wheel, 1
         )
+        self.publisher_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
 
         # publish goal_pose
         self.publisher_goal_pose = self.create_publisher(PoseStamped, "/goal_pose", 10)
+        self.publisher_initial_pose = self.create_publisher(
+            PoseWithCovarianceStamped, "/initialpose", 10
+        )
 
         # publish robot arm angle
         self.publisher_joint_trajectory = self.create_publisher(
@@ -120,6 +184,7 @@ class RosCommunicator(Node):
         )
 
         self.publisher_target_label = self.create_publisher(String, "/target_label", 10)
+        self.publisher_yolo_model_mode = self.create_publisher(String, "/yolo/model_mode", 10)
 
         self.crane_state_publisher = self.create_publisher(String, "crane_state", 10)
 
@@ -249,10 +314,34 @@ class RosCommunicator(Node):
     def subscriber_amcl_callback(self, msg):
         self.latest_amcl_pose = msg
 
+    def subscriber_slam_pose_callback(self, msg):
+        self.latest_slam_pose = msg
+
+    def subscriber_odom_callback(self, msg):
+        self.latest_odom = msg
+
     def get_latest_amcl_pose(self):
-        if self.latest_amcl_pose is None:
-            self.get_logger().warn("No AMCL pose data received yet.")
-        return self.latest_amcl_pose
+        if self.latest_amcl_pose is not None:
+            self._debug_log_once_per("pose_source", "Using /amcl_pose as robot pose", 5.0)
+            return self.latest_amcl_pose
+        if self.latest_slam_pose is not None:
+            self._debug_log_once_per("pose_source", "Using SLAM /pose as robot pose", 5.0)
+            return self.latest_slam_pose
+        if self.latest_odom is not None:
+            self._debug_log_once_per("pose_source", "Using /odom as robot pose fallback", 5.0)
+            pose_msg = PoseWithCovarianceStamped()
+            pose_msg.header = self.latest_odom.header
+            pose_msg.pose = self.latest_odom.pose
+            return pose_msg
+        self.get_logger().warn("No AMCL, SLAM /pose, or odom pose data received yet.")
+        return None
+
+    def _debug_log_once_per(self, key, message, interval_seconds):
+        now = time.monotonic()
+        last = self._last_debug_log.get(key, 0.0)
+        if now - last >= interval_seconds:
+            self.get_logger().info(f"[debug] {message}")
+            self._last_debug_log[key] = now
 
     # goal callback and get_latest_goal
     def subscriber_goal_callback(self, msg):
@@ -279,9 +368,35 @@ class RosCommunicator(Node):
             self.get_logger().warn("No Lidar data received yet.")
         return self.latest_lidar
 
+    # Compatibility aliases for TaskController safety layer.
+    # /scan is currently stored as latest_lidar in this project.
+    def get_latest_scan(self):
+        return self.latest_lidar
+
+    # Same /scan data, alternate name for readability.
+    def get_latest_laser_scan(self):
+        return self.latest_lidar
+
+    # Direct /odom getter for future stuck/debug logic.
+    def get_latest_odom(self):
+        return self.latest_odom
+        
     # received_global_plan callback and get_latest_received_global_plan
     def received_global_plan_callback(self, msg):
         self.latest_received_global_plan = msg
+
+    def map_callback(self, msg):
+        self.latest_map = msg
+        origin = msg.info.origin.position
+        self._debug_log_once_per(
+            "map",
+            f"received /map width={msg.info.width} height={msg.info.height} "
+            f"resolution={msg.info.resolution} origin=({origin.x:.2f},{origin.y:.2f})",
+            5.0,
+        )
+
+    def get_latest_map(self):
+        return self.latest_map
 
     def get_latest_received_global_plan(self):
         if self.latest_received_global_plan is None:
@@ -314,9 +429,16 @@ class RosCommunicator(Node):
     def publish_car_control(self, action_key, publish_rear=True, publish_front=True):
         msg = Float32MultiArray()
         if action_key not in ACTION_MAPPINGS:
-            # print("action error")
-            return
+            self.get_logger().warn(f"Unknown car action '{action_key}', publishing STOP instead.")
+            action_key = "STOP"
+            if action_key not in ACTION_MAPPINGS:
+                return
         velocities = ACTION_MAPPINGS[action_key]
+        self._debug_log_once_per(
+            "car_action",
+            f"Publishing car action={action_key}, velocities={velocities}",
+            1.0,
+        )
         self._vel1, self._vel2, self._vel3, self._vel4 = velocities
         msg.data = [self._vel1, self._vel2]
         if publish_rear == True:
@@ -324,6 +446,60 @@ class RosCommunicator(Node):
         msg.data = [self._vel3, self._vel4]
         if publish_front == True:
             self.publisher_forward.publish(msg)
+        self.publish_cmd_vel_from_action(action_key)
+
+    def publish_cmd_vel_from_action(self, action_key):
+        twist = Twist()
+        if action_key in (
+            "FORWARD",
+            "FORWARD_SLOW",
+            "FORWARD_VERY_SLOW",
+            "FORWARD_BRIDGE",
+            "FORWARD_BRIDGE_LEFT",
+            "FORWARD_BRIDGE_RIGHT",
+        ):
+            if action_key == "FORWARD_VERY_SLOW":
+                twist.linear.x = 0.14
+            elif action_key == "FORWARD_SLOW":
+                twist.linear.x = 0.18
+            elif action_key in ("FORWARD_BRIDGE", "FORWARD_BRIDGE_LEFT", "FORWARD_BRIDGE_RIGHT"):
+                twist.linear.x = 0.24
+                if action_key == "FORWARD_BRIDGE_LEFT":
+                    twist.angular.z = 0.25
+                elif action_key == "FORWARD_BRIDGE_RIGHT":
+                    twist.angular.z = -0.25
+            else:
+                twist.linear.x = 0.3
+        elif action_key in ("BACKWARD", "BACKWARD_SLOW"):
+            twist.linear.x = -0.18 if action_key == "BACKWARD_SLOW" else -0.3
+        elif action_key in (
+            "CLOCKWISE_ROTATION",
+            "CLOCKWISE_ROTATION_SLOW",
+            "CLOCKWISE_ROTATION_MEDIAN",
+            "CLOCKWISE_ROTATION_FINE",
+        ):
+            twist.angular.z = -0.25 if action_key == "CLOCKWISE_ROTATION_FINE" else (-0.5 if action_key == "CLOCKWISE_ROTATION_SLOW" else -0.9)
+        elif action_key in (
+            "COUNTERCLOCKWISE_ROTATION",
+            "COUNTERCLOCKWISE_ROTATION_SLOW",
+            "COUNTERCLOCKWISE_ROTATION_MEDIAN",
+            "COUNTERCLOCKWISE_ROTATION_FINE",
+        ):
+            twist.angular.z = 0.25 if action_key == "COUNTERCLOCKWISE_ROTATION_FINE" else (0.5 if action_key == "COUNTERCLOCKWISE_ROTATION_SLOW" else 0.9)
+        elif action_key == "LEFT_FRONT":
+            twist.linear.x = 0.15
+            twist.angular.z = 0.4
+        elif action_key == "RIGHT_FRONT":
+            twist.linear.x = 0.15
+            twist.angular.z = -0.4
+        elif action_key == "RIGHT_FRONT_STRONG":
+            twist.linear.x = 0.22
+            twist.angular.z = -0.55
+        elif action_key == "STOP":
+            pass
+        else:
+            return
+        self.publisher_cmd_vel.publish(twist)
 
     # publish goal_pose
     def publish_goal_pose(self, goal):
@@ -336,6 +512,29 @@ class RosCommunicator(Node):
         goal_pose.pose.position.z = 0.0
         goal_pose.pose.orientation.w = 1.0
         self.publisher_goal_pose.publish(goal_pose)
+
+    def publish_initial_pose(self, x, y, yaw):
+        initial_pose = PoseWithCovarianceStamped()
+        initial_pose.header = Header()
+        initial_pose.header.stamp = self.get_clock().now().to_msg()
+        initial_pose.header.frame_id = "map"
+        initial_pose.pose.pose.position.x = float(x)
+        initial_pose.pose.pose.position.y = float(y)
+        initial_pose.pose.pose.position.z = 0.0
+
+        half_yaw = float(yaw) * 0.5
+        initial_pose.pose.pose.orientation.z = math.sin(half_yaw)
+        initial_pose.pose.pose.orientation.w = math.cos(half_yaw)
+
+        # AMCL common initial covariance: some x/y/yaw uncertainty, other axes unused.
+        initial_pose.pose.covariance[0] = 0.25
+        initial_pose.pose.covariance[7] = 0.25
+        initial_pose.pose.covariance[35] = 0.06853891945200942
+
+        self.publisher_initial_pose.publish(initial_pose)
+        self.get_logger().info(
+            f"Published /initialpose x={float(x):.3f} y={float(y):.3f} yaw={float(yaw):.3f}"
+        )
 
     # publish robot arm angle
     def publish_robot_arm_angle(self, angle):
@@ -364,14 +563,47 @@ class RosCommunicator(Node):
 
     def yolo_target_info_callback(self, msg):
         self.latest_yolo_target_info = msg
+        self.latest_data["target_info"] = msg
 
     def get_latest_yolo_target_info(self):
         if self.latest_yolo_target_info is None:
             return None
         return self.latest_yolo_target_info
 
+    def yolo_bridge_info_callback(self, msg):
+        self.latest_yolo_bridge_info = msg
+        self.latest_data["bridge_info"] = msg
+
+    def get_latest_yolo_bridge_info(self):
+        return self.latest_yolo_bridge_info
+
+    def yolo_path_info_callback(self, msg):
+        self.latest_yolo_path_info = msg
+        self.latest_data["path_info"] = msg
+
+    def get_latest_yolo_path_info(self):
+        return self.latest_yolo_path_info
+
+    def yolo_bridge_entry_info_callback(self, msg):
+        self.latest_yolo_bridge_entry_info = msg
+        self.latest_data["bridge_entry_info"] = msg
+
+    def get_latest_yolo_bridge_entry_info(self):
+        return self.latest_yolo_bridge_entry_info
+
+    def yolo_pre_bridge_goal_callback(self, msg):
+        self.latest_yolo_pre_bridge_goal = msg
+        self.latest_data["pre_bridge_goal"] = msg
+
+    def get_latest_yolo_pre_bridge_goal(self):
+        return self.latest_yolo_pre_bridge_goal
+
+    def get_latest_data(self, key):
+        return self.latest_data.get(key)
+
     def camera_x_multi_depth_callback(self, msg):
         self.latest_camera_x_multi_depth = msg
+        self.latest_data["camera_x_multi_depth"] = msg
 
     def get_latest_camera_x_multi_depth(self):
         if self.latest_camera_x_multi_depth is None:
@@ -389,8 +621,36 @@ class RosCommunicator(Node):
             return None
         return self.latest_yolo_coordinates
 
+    def yolo_target_map_position_callback(self, msg):
+        self.latest_yolo_target_map_position = msg
+        self.latest_data["target_map_position"] = msg
+
+    def get_latest_yolo_target_map_position(self):
+        return self.latest_yolo_target_map_position
+
     def yolo_detection_offset_callback(self, msg):
-        self.latest_yolo_offset = msg
+        try:
+            offsets = orjson.loads(msg.data)
+            if not offsets:
+                self.latest_yolo_offset = None
+                return
+            offset = offsets[0].get("offset_flu")
+            if not offset or len(offset) < 3:
+                self.latest_yolo_offset = None
+                return
+            point_msg = PointStamped()
+            point_msg.header.stamp = self.get_clock().now().to_msg()
+            point_msg.header.frame_id = "camera_optical_frame"
+            point_msg.point.x = float(offset[0])
+            point_msg.point.y = float(offset[1])
+            point_msg.point.z = float(offset[2])
+            self.latest_yolo_offset = point_msg
+        except Exception as exc:
+            self._debug_log_once_per(
+                "yolo_offset_parse",
+                f"Could not parse /yolo/object/offset: {exc}",
+                2.0,
+            )
 
     def get_latest_yolo_detection_offset(self):
         if self.latest_yolo_offset is None:
@@ -401,6 +661,11 @@ class RosCommunicator(Node):
         target_label_msg = String()
         target_label_msg.data = label
         self.publisher_target_label.publish(target_label_msg)
+
+    def publish_yolo_model_mode(self, mode):
+        mode_msg = String()
+        mode_msg.data = mode
+        self.publisher_yolo_model_mode.publish(mode_msg)
 
     # 天車
     def publish_crane_state(self, state):

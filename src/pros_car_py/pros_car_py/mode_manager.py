@@ -2,6 +2,7 @@ import urwid
 from pros_car_py.base_mode import BaseMode
 import threading
 import time
+from pros_car_py.task_controller import TaskType, TaskState
 
 
 class VehicleMode(BaseMode):
@@ -85,3 +86,50 @@ class AutoArmMode(BaseMode):
             message=f"AutoArm Mode: Submode {submode}\nPress 'q' to go back.",
             on_key=on_key,
         )
+
+
+class AutoTaskMode(BaseMode):
+    submodes = [task.value for task in TaskType]
+
+    def enter(self):
+        self.app.horizontal_select(self.submodes, self.handle_submode_select)
+
+    def handle_submode_select(self, submode):
+        task_type = TaskType(submode)
+        self.app.task_controller.start(task_type)
+        self._render_task_screen(task_type)
+        self._schedule_tick(task_type)
+
+    def _render_task_screen(self, task_type):
+        controller = self.app.task_controller
+        message = (
+            f"Automatic Task Mode: {task_type.value}\n"
+            "Press 'q' to stop and return to task menu.\n\n"
+            f"State: {controller.state.value}\n"
+            f"Status: {controller.status_message}\n"
+        )
+        self.app.loop.widget = urwid.Filler(urwid.Text(message), valign="top")
+        self.app.loop.unhandled_input = self._handle_input
+
+    def _handle_input(self, key):
+        if key == "q":
+            self.app.task_controller.stop()
+            self.enter()
+
+    def _schedule_tick(self, task_type):
+        def tick(loop, user_data):
+            controller = self.app.task_controller
+            if not controller.is_running():
+                self._render_task_screen(task_type)
+                return
+
+            action = controller.tick()
+            self.app.car_controller.update_action(action)
+            self._render_task_screen(task_type)
+            loop.set_alarm_in(0.1, tick)
+
+        self.app.loop.set_alarm_in(0.1, tick)
+
+    def exit(self):
+        if self.app.task_controller.state not in (TaskState.IDLE, TaskState.DONE):
+            self.app.task_controller.stop()

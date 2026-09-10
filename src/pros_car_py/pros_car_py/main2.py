@@ -15,6 +15,8 @@ from pros_car_py.crane_controller import CraneController
 from pros_car_py.custom_control import CustomControl
 from pros_car_py.ik_solver import PybulletRobotController
 from pros_car_py.mode_app import ModeApp
+from pros_car_py.task_controller import TaskController
+from pros_car_py.frontier_explorer import FrontierExplorer
 
 
 def init_ros_node():
@@ -36,7 +38,23 @@ def main():
         ros_communicator, data_processor, ik_solver, num_joints=7
     )
     custom_control = CustomControl(car_controller, arm_controller)
-    app = ModeApp(car_controller, arm_controller, custom_control, crane_controller)
+    frontier_explorer = FrontierExplorer(
+        ros_communicator, data_processor, nav2_processing
+    )
+    task_controller = TaskController(
+        car_controller,
+        arm_controller,
+        nav2_processing,
+        ros_communicator,
+        frontier_explorer,
+    )
+    app = ModeApp(
+        car_controller,
+        arm_controller,
+        custom_control,
+        crane_controller,
+        task_controller,
+    )
 
     try:
         app.main()

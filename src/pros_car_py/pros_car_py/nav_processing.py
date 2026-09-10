@@ -6,9 +6,17 @@ from pros_car_py.nav2_utils import (
     cal_distance,
 )
 import math
+import os
 
 
 class Nav2Processing:
+    BRIDGE_PATH_MIN_CONFIDENCE = 0.55
+    BRIDGE_PATH_MIN_AREA = 1000.0
+    BRIDGE_ENTRY_STOP_DISTANCE = 0.55
+    BRIDGE_ENTRY_TOO_CLOSE_DISTANCE = 0.40
+    BRIDGE_PATH_ALIGN_DELTA_X = 35.0
+    BRIDGE_PATH_ALIGN_ANGLE_DEG = 8.0
+
     def __init__(self, ros_communicator, data_processor):
         self.ros_communicator = ros_communicator
         self.data_processor = data_processor
@@ -18,11 +26,18 @@ class Nav2Processing:
         self.index_length = 0
         self.recordFlag = 0
         self.goal_published_flag = False
+        self._camera_nav_delta_ema = None
+        self._camera_nav_depth_ema = None
+        self._camera_nav_last_action = "STOP"
+        self._camera_nav_invert_turn = os.environ.get("PROS_CAMERA_NAV_INVERT_TURN", "0") == "1"
 
     def reset_nav_process(self):
         self.finishFlag = False
         self.recordFlag = 0
         self.goal_published_flag = False
+        self._camera_nav_delta_ema = None
+        self._camera_nav_depth_ema = None
+        self._camera_nav_last_action = "STOP"
 
     def finish_nav_process(self):
         self.finishFlag = True
@@ -156,119 +171,159 @@ class Nav2Processing:
     def filter_negative_one(self, depth_list):
         return [depth for depth in depth_list if depth != -1.0]
 
-    def camera_nav(self):
-        """
-        YOLO 目標資訊 (yolo_target_info) 說明：
-
-        - 索引 0 (index 0)：
-            - 表示是否成功偵測到目標
-            - 0：未偵測到目標
-            - 1：成功偵測到目標
-
-        - 索引 1 (index 1)：
-            - 目標的深度距離 (與相機的距離，單位為公尺)，如果沒偵測到目標就回傳 0
-            - 與目標過近時(大約 40 公分以內)會回傳 -1
-
-        - 索引 2 (index 2)：
-            - 目標相對於畫面正中心的像素偏移量
-            - 若目標位於畫面中心右側，數值為正
-            - 若目標位於畫面中心左側，數值為負
-            - 若沒有目標則回傳 0
-
-        畫面 n 個等分點深度 (camera_multi_depth) 說明 :
-
-        - 儲存相機畫面中央高度上 n 個等距水平點的深度值。
-        - 若距離過遠、過近（小於 40 公分）或是實體相機有時候深度會出一些問題，則該點的深度值將設定為 -1。
-        """
-        yolo_target_info = self.data_processor.get_yolo_target_info()
-        camera_multi_depth = self.data_processor.get_camera_x_multi_depth()
-        if camera_multi_depth == None or yolo_target_info == None:
+    def bridge_depth_segment_nav(self):
+        path_info = self.data_processor.get_yolo_path_info()
+        if path_info is None or len(path_info) < 9:
             return "STOP"
 
-        camera_forward_depth = self.filter_negative_one(camera_multi_depth[7:13])
-        camera_left_depth = self.filter_negative_one(camera_multi_depth[0:7])
-        camera_right_depth = self.filter_negative_one(camera_multi_depth[13:20])
+        try:
+            found = float(path_info[0]) == 1.0
+            bottom_center_x = float(path_info[3])
+            angle = float(path_info[4])
+            width = float(path_info[5])
+            area = float(path_info[7])
+            confidence = float(path_info[8])
+        except Exception:
+            return "STOP"
+
+        if (
+            not found
+            or not math.isfinite(bottom_center_x)
+            or not math.isfinite(angle)
+            or not math.isfinite(width)
+            or not math.isfinite(area)
+            or not math.isfinite(confidence)
+            or width <= 0.0
+            or confidence < self.BRIDGE_PATH_MIN_CONFIDENCE
+            or area < self.BRIDGE_PATH_MIN_AREA
+        ):
+            return "STOP"
+
+        image_center_x = width / 2.0
+        delta_x = bottom_center_x - image_center_x
+
+        entry_depth = None
+        entry_info = self.data_processor.get_yolo_bridge_entry_info()
+        if entry_info is not None and len(entry_info) >= 4:
+            try:
+                depth = float(entry_info[3])
+                if math.isfinite(depth) and depth > 0.0:
+                    entry_depth = depth
+            except Exception:
+                entry_depth = None
+
+        if entry_depth is not None:
+            if entry_depth < self.BRIDGE_ENTRY_TOO_CLOSE_DISTANCE:
+                return "STOP"
+            if (
+                self.BRIDGE_ENTRY_TOO_CLOSE_DISTANCE <= entry_depth <= 0.60
+                and abs(delta_x) <= self.BRIDGE_PATH_ALIGN_DELTA_X
+                and abs(angle) <= self.BRIDGE_PATH_ALIGN_ANGLE_DEG
+            ):
+                return "STOP_READY_FOR_ASCEND"
+            if entry_depth <= self.BRIDGE_ENTRY_STOP_DISTANCE:
+                return "STOP"
+
+        if abs(delta_x) > self.BRIDGE_PATH_ALIGN_DELTA_X:
+            if delta_x > 0:
+                return "CLOCKWISE_ROTATION_FINE"
+            return "COUNTERCLOCKWISE_ROTATION_FINE"
+
+        if abs(angle) > self.BRIDGE_PATH_ALIGN_ANGLE_DEG:
+            if angle > 0:
+                return "CLOCKWISE_ROTATION_FINE"
+            return "COUNTERCLOCKWISE_ROTATION_FINE"
+
+        return "FORWARD_VERY_SLOW"
+
+    def camera_nav(self):
+        yolo_target_info = self.data_processor.get_yolo_target_info()
+        camera_multi_depth = self.data_processor.get_camera_x_multi_depth()
+
+        if camera_multi_depth is None or yolo_target_info is None:
+            return "STOP"
 
         action = "STOP"
-        limit_distance = 0.7
 
-        # if all(depth > limit_distance for depth in camera_forward_depth):
         if yolo_target_info[0] == 1:
-            if yolo_target_info[2] > 200.0:
-                action = "CLOCKWISE_ROTATION_SLOW"
-            elif yolo_target_info[2] < -200.0:
-                action = "COUNTERCLOCKWISE_ROTATION_SLOW"
+            depth = float(yolo_target_info[1])
+            delta_x = float(yolo_target_info[2])
+
+            alpha = 0.35
+            self._camera_nav_delta_ema = self._ema(
+                self._camera_nav_delta_ema, delta_x, alpha
+            )
+
+            if depth > 0.0:
+                self._camera_nav_depth_ema = self._ema(
+                    self._camera_nav_depth_ema, depth, alpha
+                )
+
+            delta_x = self._camera_nav_delta_ema
+            depth = self._camera_nav_depth_ema if self._camera_nav_depth_ema is not None else depth
+
+            centered_px = 120.0
+
+            if delta_x > centered_px:
+                action = "CLOCKWISE_ROTATION_FINE"
+            elif delta_x < -centered_px:
+                action = "COUNTERCLOCKWISE_ROTATION_FINE"
             else:
-                if yolo_target_info[1] < 0.5:
+                if depth <= 0.0 or depth < 0.9:
                     action = "STOP"
                 else:
-                    action = "FORWARD_SLOW"
+                    action = "FORWARD_VERY_SLOW"
+
         else:
-            action = "CLOCKWISE_ROTATION"
-        # elif any(depth < limit_distance for depth in camera_left_depth):
-        #     action = "CLOCKWISE_ROTATION"
-        # elif any(depth < limit_distance for depth in camera_right_depth):
-        #     action = "COUNTERCLOCKWISE_ROTATION"
+            self._camera_nav_delta_ema = None
+            self._camera_nav_depth_ema = None
+            action = "STOP"
+
+        if self._camera_nav_invert_turn:
+            if action == "CLOCKWISE_ROTATION_FINE":
+                action = "COUNTERCLOCKWISE_ROTATION_FINE"
+            elif action == "COUNTERCLOCKWISE_ROTATION_FINE":
+                action = "CLOCKWISE_ROTATION_FINE"
+
+        self._camera_nav_last_action = action
         return action
+
+
+    def _ema(self, current, value, alpha):
+        if current is None:
+            return value
+        return current * (1.0 - alpha) + value * alpha
+
 
     def camera_nav_unity(self):
-        """
-        YOLO 目標資訊 (yolo_target_info) 說明：
-
-        - 索引 0 (index 0)：
-            - 表示是否成功偵測到目標
-            - 0：未偵測到目標
-            - 1：成功偵測到目標
-
-        - 索引 1 (index 1)：
-            - 目標的深度距離 (與相機的距離，單位為公尺)，如果沒偵測到目標就回傳 0
-            - 與目標過近時(大約 40 公分以內)會回傳 -1
-
-        - 索引 2 (index 2)：
-            - 目標相對於畫面正中心的像素偏移量
-            - 若目標位於畫面中心右側，數值為正
-            - 若目標位於畫面中心左側，數值為負
-            - 若沒有目標則回傳 0
-
-        畫面 n 個等分點深度 (camera_multi_depth) 說明 :
-
-        - 儲存相機畫面中央高度上 n 個等距水平點的深度值。
-        - 若距離過遠、過近（小於 40 公分）或是實體相機有時候深度會出一些問題，則該點的深度值將設定為 -1。
-        """
         yolo_target_info = self.data_processor.get_yolo_target_info()
         camera_multi_depth = self.data_processor.get_camera_x_multi_depth()
-        yolo_target_info[1] *= 1
-        camera_multi_depth = list(
-            map(lambda x: x * 1.0, self.data_processor.get_camera_x_multi_depth())
-        )
 
-        if camera_multi_depth == None or yolo_target_info == None:
+        if camera_multi_depth is None or yolo_target_info is None:
             return "STOP"
 
-        camera_forward_depth = self.filter_negative_one(camera_multi_depth[7:13])
-        camera_left_depth = self.filter_negative_one(camera_multi_depth[0:7])
-        camera_right_depth = self.filter_negative_one(camera_multi_depth[13:20])
         action = "STOP"
-        limit_distance = 10.0
-        print(yolo_target_info[1])
-        if all(depth > limit_distance for depth in camera_forward_depth):
-            if yolo_target_info[0] == 1:
-                if yolo_target_info[2] > 200.0:
-                    action = "CLOCKWISE_ROTATION_SLOW"
-                elif yolo_target_info[2] < -200.0:
-                    action = "COUNTERCLOCKWISE_ROTATION_SLOW"
-                else:
-                    if yolo_target_info[1] < 2.0:
-                        action = "STOP"
-                    else:
-                        action = "FORWARD_SLOW"
+
+        if yolo_target_info[0] == 1:
+            depth = float(yolo_target_info[1])
+            delta_x = float(yolo_target_info[2])
+
+            centered_px = 120.0
+
+            if delta_x > centered_px:
+                action = "CLOCKWISE_ROTATION_FINE"
+            elif delta_x < -centered_px:
+                action = "COUNTERCLOCKWISE_ROTATION_FINE"
             else:
-                action = "FORWARD"
-        elif any(depth < limit_distance for depth in camera_left_depth):
-            action = "CLOCKWISE_ROTATION"
-        elif any(depth < limit_distance for depth in camera_right_depth):
-            action = "COUNTERCLOCKWISE_ROTATION"
+                if depth <= 0.0 or depth < 0.9:
+                    action = "STOP"
+                else:
+                    action = "FORWARD_VERY_SLOW"
+        else:
+            action = "STOP"
+
         return action
+
 
     def stop_nav(self):
         return "STOP"

@@ -7,7 +7,10 @@ services:
       - .env
     volumes:
       - ./src:/workspaces/src:ro
+      - ./logs:/workspaces/logs
       - ./car_control_for_docker_compose.sh:/workspaces/car_control_for_docker_compose.sh
+    environment:
+      - PROS_TASK_LOG_PATH=/workspaces/logs/pros_task_debug.log
     networks:
       - my_bridge_network
     ports:

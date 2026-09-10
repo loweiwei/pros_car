@@ -52,6 +52,7 @@ ACTION_MAPPINGS = {
         -rotate_vel_median,
     ],  # 中右自轉
     "RIGHT_FRONT": [rotate_vel * 1.2, rotate_vel, rotate_vel * 1.2, rotate_vel],  # 右前
+    "RIGHT_FRONT_STRONG": [rotate_vel * 1.5, rotate_vel * 1.25, rotate_vel * 1.5, rotate_vel * 1.25],  # Task3 強推門右前
     "RIGHT_SHIFT": [rotate_vel, -rotate_vel, -rotate_vel, rotate_vel],
     "LEFT_SHIFT": [-rotate_vel, rotate_vel, rotate_vel, -rotate_vel],
     "STOP": [0.0, 0.0, 0.0, 0.0],

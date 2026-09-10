@@ -16,6 +16,8 @@ class DataProcessor:
 
     def get_processed_amcl_pose(self):
         amcl_pose_msg = self.ros_communicator.get_latest_amcl_pose()
+        if amcl_pose_msg is None:
+            return None
         position = amcl_pose_msg.pose.pose.position
         orientation = amcl_pose_msg.pose.pose.orientation
         pose = [position.x, position.y, position.z]
@@ -33,6 +35,30 @@ class DataProcessor:
             return list(self.ros_communicator.get_latest_camera_x_multi_depth().data)
         else:
             return None
+
+    def get_yolo_path_info(self):
+        msg = self.ros_communicator.get_latest_yolo_path_info()
+        if msg is None or not hasattr(msg, "data"):
+            return None
+        return list(msg.data)
+
+    def get_yolo_bridge_entry_info(self):
+        msg = self.ros_communicator.get_latest_yolo_bridge_entry_info()
+        if msg is None or not hasattr(msg, "data"):
+            return None
+        return list(msg.data)
+
+    def get_yolo_pre_bridge_goal(self):
+        return self.ros_communicator.get_latest_yolo_pre_bridge_goal()
+
+    def get_yolo_target_map_position(self):
+        return self.ros_communicator.get_latest_yolo_target_map_position()
+
+    def get_yolo_bridge_info(self):
+        msg = self.ros_communicator.get_latest_yolo_bridge_info()
+        if msg is None or not hasattr(msg, "data"):
+            return None
+        return list(msg.data)
 
     def get_processed_lidar(self):
         lidar_msg = self.ros_communicator.get_latest_lidar()

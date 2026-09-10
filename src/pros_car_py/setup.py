@@ -22,6 +22,8 @@ setup(
     entry_points={
         "console_scripts": [
             "robot_control = pros_car_py.main2:main",
+            "robot_control_skip_task1 = pros_car_py.main2_skip_task1:main",
+            "robot_control_skip_task2_bear = pros_car_py.main2_skip_task2_bear:main",
             "carC_reader = pros_car_py.carC_serial_reader:main",
             "carC_writer = pros_car_py.carC_serial_writer:main",
             "arm_reader = pros_car_py.arm_reader:main",

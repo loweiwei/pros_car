@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # 1. 統一管理 -v 參數
-VOLUME_ARGS="-v $(pwd)/src:/workspaces/src -v $(pwd)/launch:/workspaces/launch"
+VOLUME_ARGS="-v $(pwd)/src:/workspaces/src -v $(pwd)/launch:/workspaces/launch -v $(pwd)/logs:/workspaces/logs"
+LOG_ENV="-e PROS_TASK_LOG_PATH=/workspaces/logs/pros_task_debug.log"
 
 # Port mapping check
 PORT_MAPPING=""
@@ -65,9 +66,11 @@ if [ "$ARCH" = "aarch64" ]; then
         $PORT_MAPPING \
         $device_options \
         --runtime=nvidia \
-        --env-file .env \
-        -v "$(pwd)/src:/workspaces/src" \
-        ghcr.io/screamlab/pros_car_docker_image:latest \
+            --env-file .env \
+            $LOG_ENV \
+            -v "$(pwd)/src:/workspaces/src" \
+            -v "$(pwd)/logs:/workspaces/logs" \
+            ghcr.io/screamlab/pros_car_docker_image:latest \
         /bin/bash
 
 elif [ "$ARCH" = "x86_64" ] || ([ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]); then
@@ -80,6 +83,7 @@ elif [ "$ARCH" = "x86_64" ] || ([ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]); 
             $PORT_MAPPING \
             $device_options \
             --env-file .env \
+            $LOG_ENV \
             $VOLUME_ARGS \
             ghcr.io/screamlab/pros_car_docker_image:latest \
             /bin/bash
@@ -91,6 +95,7 @@ elif [ "$ARCH" = "x86_64" ] || ([ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]); 
             $GPU_FLAGS \
             $device_options \
             --env-file .env \
+            $LOG_ENV \
             $VOLUME_ARGS \
             ghcr.io/screamlab/pros_car_docker_image:latest \
             /bin/bash
@@ -102,6 +107,7 @@ elif [ "$ARCH" = "x86_64" ] || ([ "$ARCH" = "arm64" ] && [ "$OS" = "Darwin" ]); 
                 --network compose_my_bridge_network \
                 $PORT_MAPPING \
                 --env-file .env \
+                $LOG_ENV \
                 $device_options \
                 $VOLUME_ARGS \
                 ghcr.io/screamlab/pros_car_docker_image:latest \
